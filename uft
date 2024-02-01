@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+
+# Author: <YOUR_NAME_HERE>
+# CSC 574 Mini-Project 1
+# uft: unencrypted file transfer
+
+# Import additional modules as needed.
+import argparse
+import sys
+import socket
+import struct
+
+
+def print_debug(*objects, sep=' ', end='\n', file=sys.stderr, flush=False):
+    """
+    When stdout is redirected, messages cannot be printed to stdout as they will be written to the file, not the console.
+    Use this function to print debug messages to stderr.
+    It supports all optional arguments of the print function, with the exception that file is overridden to stderr.
+
+    IMPORTANT: This function cannot be used to display debug messages in the autograder environment.
+
+    :param objects: Any non-keyword argument that can be converted to string.
+    :param sep: String to separate objects. [Default: Space]
+    :param end: String to append to the end. [Default: Newline]
+    :param file: Not used. Overridden to sys.stderr.
+    :param flush: Forcibly flush the stream.
+    """
+    
+    print(objects, sep=sep, end=end, file=sys.stderr, flush=flush)
+
+
+def read_file(buffer_len):
+    """
+    Wrapper function for reading from stdin.
+    Use < as the last option to redirect a file to stdin.
+    Other options must be specified on the command line before the redirect operator.
+
+    :param buffer_len: Number of bytes to read at once.
+    :return: Raw bytes or None if buffer is empty.
+    """
+
+    return sys.stdin.buffer.read(buffer_len)
+
+
+def write_file(data):
+    """
+    Wrapper function for writing a file to stdout.
+    Use > as the last option to redirect stdout to a file.
+    Other options must be specified on the command line before the redirect operator.
+
+    :param data: raw bytes.
+    """
+
+    sys.stdout.buffer.write(data)
+
+
+def server(port):
+    """
+    Server Code
+
+    :param port: Port number to listen on.
+    """
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', port))
+        s.listen()
+        conn, addr = s.accept()
+        with conn:
+            print_debug("Connected by", addr)
+            while True:
+                head = conn.recv(2)
+                if len(head) < 2:
+                    return b''
+                length = struct.unpack('>H',head)[0]
+                data = conn.recv(length)  # Read the length header
+                if not data:
+                    break
+                write_file(data)  # Write the data to stdout
+
+    
+        
+
+
+def client(addr, port):
+    """
+    Client Code
+
+    :param addr: IP address of the server.
+    :param port: Port to connect to.
+    :return:
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((addr, port))
+        while True:
+            data = read_file(1024)  # Read data in chunks
+            if not data:
+                break
+            length = len(data)
+            pdu = struct.pack('!H', length) + data  # Pack length and data
+            s.sendall(pdu)  # Send the PDU
+
+
+
+
+def parse_args():
+    """
+    Command Line Argument Parser
+
+    :return: Argparse Namespace of identified command line arguments.
+    """
+    
+    # Configure the argument parser.
+    parser = argparse.ArgumentParser(description='Unencrypted File Transfer')
+    server_group = parser.add_argument_group('server_group', 'Server mode options')
+    server_group.add_argument('-l', dest='server_port', action='store', help='Server mode with port')
+    client_group = parser.add_argument_group('client_group', 'Client mode options')
+    client_group.add_argument('client_ip_address', nargs='?')
+    client_group.add_argument('client_port', nargs='?')
+
+    # Parse arguments.
+    args = parser.parse_args()
+
+    # Check if arguments are valid.
+    args_ok = ((args.server_port is None) and (args.client_ip_address is not None and args.client_port is not None)) or \
+              ((args.server_port is not None) and (args.client_ip_address is None and args.client_port is None))
+
+    # If not, show usage message and exit.
+    if not args_ok:
+        print("./uft [-l SERVER_PORT > OUTPUT FILE] [CLIENT_IP_ADDRESS CLIENT_PORT < INPUT_FILE]")
+        sys.exit(0)
+
+    # Otherwise return the args.
+    return args
+
+
+def main():
+    # Parse Arguments
+    args = parse_args()
+
+    # Launch the client or server depending on the arguments received.
+    if args.server_port is not None:
+        port = int(args.server_port)
+        server(port)
+    else:
+        addr = args.client_ip_address
+        port = int(args.client_port)
+        client(addr, port)
+
+
+if __name__ == "__main__":
+    main()
