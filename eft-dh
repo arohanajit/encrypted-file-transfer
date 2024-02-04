@@ -7,6 +7,17 @@
 # Import additional modules as needed.
 import argparse
 import sys
+import os
+import socket
+import struct
+from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
+from Crypto.Protocol.KDF import PBKDF2
+from Crypto.Util.Padding import pad, unpad
+import random
+import binascii
+import os
+import hashlib
 
 # Diffie-Hellman Parameters
 g=2
@@ -84,6 +95,15 @@ def create_final_dh_string(new_key):
     new_key_str = '%x' % new_key
     return new_key_str.encode('utf-8')
 
+def generate_dh_key():
+    # Generate Diffie-Hellman private key and public key
+    p = int("00cc81ea8157352a9e9a318aac4e33ffba80fc8da3373fb44895109e4c3ff6cedcc55c02228fccbd551a504feb4346d2aef47053311ceaba95f6c540b967b9409e9f0502e598cfc71327c5a455e2e807bede1e0b7d23fbea054b951ca964eaecae7ba842ba1fc6818c453bf19eb9c5c86e723e69a210d4b72561cab97b3fb3060b", 16)
+    g = 2
+    private_key = int.from_bytes(get_random_bytes(32), byteorder='big')
+    public_key = pow(g, private_key, p)
+    return private_key, public_key
+    
+
 
 def server(port):
     """
@@ -91,9 +111,41 @@ def server(port):
 
     :param port: Port number to listen on.
     """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1",port))
+        s.listen()
+        conn,addr = s.accept()
+        a = random.randrange(1,p-1)
+        A = pow(g,a,p)
+        A = (str(A).zfill(384)).encode('utf-8')
+        conn.send(A)
+        B = int(conn.recv(384).decode('utf-8'))
+        key = '%x' % pow(B,a,p)
+        hash = hashlib.new('sha256')
+        hash.update(key.encode('utf-8'))
+        sess_key = hash.digest()[:32]
+        while True:
+            head = conn.recv(2)
+            if len(head)<2:
+                return b''
+            length = struct.unpack('>H',head)[0]
+            encrypt_data = conn.recv(length)
+            nonce = encrypt_data[:16]
+            tag = encrypt_data[16:32]
+            ciphertext = encrypt_data[32:]
+            cipher = AES.new(sess_key, AES.MODE_GCM, nonce)
+            try:
+                decrypt_data = cipher.decrypt_and_verify(ciphertext,tag)
+            except Exception as e:
+                sys.stderr.write("Error: integrity check failed.\n")
+                return
+            data = unpad(decrypt_data,16, style='pkcs7')
+            if not data:
+                break
+            write_file(data)
 
-    # TODO - Replace with your server code.
-    pass
+
+
 
 
 def client(addr, port):
@@ -104,9 +156,34 @@ def client(addr, port):
     :param port: Port to connect to.
     :return:
     """
+    global g,p
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((addr, port))
+        a = random.randrange(1,p-1)
+        A = pow(g,a,p)
+        A = (str(A).zfill(384)).encode('utf-8')
+        s.send(A)
+        B = int(s.recv(384).decode('utf-8'))
+        key = '%x' % pow(B,a,p)
+        hash = hashlib.new('sha256')
+        hash.update(key.encode('utf-8'))
+        sess_key = hash.digest()[:32]
+        while True:
+            data = read_file(1024)
+            if not data:
+                break
+            cipher = AES.new(sess_key, AES.MODE_GCM)
+            nonce = cipher.nonce
+            ciphertext, tag = cipher.encrypt_and_digest(pad(data,16,style='pkcs7'))
+            length = len(ciphertext) + len(nonce) + len(tag)
+            head = struct.pack('>H',length)
+            data = head + nonce + tag + ciphertext 
+            s.send(data)
 
-    # TODO - Replace with your client code.
-    pass
+        
+
+
+        
 
 
 def parse_args():

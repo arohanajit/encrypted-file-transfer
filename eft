@@ -7,6 +7,14 @@
 # Import additional modules as needed.
 import argparse
 import sys
+import os
+import socket
+import struct
+from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
+from Crypto.Protocol.KDF import PBKDF2
+from Crypto.Util.Padding import pad, unpad
+import binascii
 
 
 def print_debug(*objects, sep=' ', end='\n', file=sys.stderr, flush=False):
@@ -58,8 +66,32 @@ def server(port, plain_key):
     :param plain_key: Plain text decryption key.
     """
 
-    # TODO - Replace with your server code.
-    pass
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', port))
+        s.listen()
+        conn, addr = s.accept()
+        with conn:
+            salt = conn.recv(16)
+            key = PBKDF2(plain_key, salt, dkLen=32)  # Derive key using PBKDF2
+            while True:
+                head = conn.recv(2)
+                if len(head) < 2:
+                    return b''
+                length = struct.unpack('>H',head)[0]
+                encrypt_data = conn.recv(length)
+                nonce = encrypt_data[:16]
+                tag = encrypt_data[16:32]
+                ciphertext = encrypt_data[32:]
+                cipher = AES.new(key, AES.MODE_GCM, nonce)
+                try:
+                    decrypt_data = cipher.decrypt_and_verify(ciphertext,tag)
+                except Exception as e:
+                    sys.stderr.write("Error: integrity check failed.\n")
+                    return
+                data = unpad(decrypt_data,16, style='pkcs7')
+                if not data:
+                    break
+                write_file(data)
 
 
 def client(addr, port, plain_key):
@@ -72,8 +104,23 @@ def client(addr, port, plain_key):
     :return:
     """
 
-    # TODO - Replace with your client code.
-    pass
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((addr, port))
+        salt = get_random_bytes(16)
+        s.sendall(salt)
+        key = PBKDF2(plain_key, salt, dkLen=32)  # Derive key using PBKDF2
+
+        while True:
+            data = read_file(1024)  # Read data in chunks
+            if not data:
+                break
+            cipher = AES.new(key, AES.MODE_GCM)
+            nonce = cipher.nonce
+            ciphertext, tag = cipher.encrypt_and_digest(pad(data, 16, style='pkcs7'))
+            length = len(ciphertext) + len(nonce) + len(tag)
+            head = struct.pack('>H',length)
+            data = head + nonce + tag + ciphertext 
+            s.send(data)
 
 
 def parse_args():
